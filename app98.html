@@ -1,36 +1,172 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Web App จาก Google Apps Script</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบคำนวณค่าน้ำมัน</title>
+  <link rel="manifest" href="manifest.json">
   <style>
-    body {
-      margin: 0;
-      padding: 0;
-      font-family: sans-serif;
-      background: #f9f9f9;
-    }
-    .iframe-container {
-      position: relative;
-      width: 100%;
-      height: 100vh;
-      overflow: hidden;
-    }
-    iframe {
-      border: none;
-      width: 100%;
-      height: 100%;
-    }
+    body { font-family: 'Prompt', sans-serif; padding: 20px; max-width: 900px; margin: auto; background: #f0f4f8; }
+    h2 { text-align: center; }
+    input, button, select { padding: 8px; margin: 5px; width: 100%; max-width: 300px; }
+    table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+    th { background-color: #e0e0e0; }
+    .summary { margin-top: 20px; font-weight: bold; background: #fff; padding: 10px; border-radius: 6px; }
+    .btn { padding: 6px 10px; cursor: pointer; margin: 2px; border: none; border-radius: 4px; }
+    .btn-danger { background: #e74c3c; color: white; }
+    .btn-edit { background: #f1c40f; color: black; }
+    .btn-export { background: #2ecc71; color: white; }
   </style>
 </head>
 <body>
-  <div class="iframe-container">
-    <iframe 
-      src="https://script.google.com/macros/s/AKfycbxzJzR66Tys-4fTFBy4erVbUfyJgA15wqKjvTVil1bKtDzWOMsW8EJSIP71UhdWzOqOFA/exec"
-      allowfullscreen
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-    ></iframe>
-  </div>
+
+<h2>ระบบคำนวณค่าน้ำมัน</h2>
+
+<form id="fuelForm">
+  <input type="text" id="start" placeholder="จุดเริ่มต้น" required />
+  <input type="text" id="end" placeholder="จุดปลายทาง" required />
+  <input type="number" id="consumption" step="0.01" placeholder="อัตราสิ้นเปลือง (กม./ลิตร)" required />
+  <input type="number" id="price" step="0.01" placeholder="ราคาน้ำมัน (บาท/ลิตร)" required />
+  <button type="submit" class="btn">เพิ่มเส้นทาง</button>
+</form>
+
+<table id="resultTable">
+  <thead>
+    <tr>
+      <th>จุดเริ่มต้น</th><th>จุดปลายทาง</th><th>ระยะทาง</th><th>น้ำมันที่ใช้</th><th>ค่าน้ำมัน</th><th>การจัดการ</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div class="summary" id="summary"></div>
+<button class="btn btn-export" onclick="exportToExcel()">Export to Excel</button>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=places,geometry" async defer></script>
+<script>
+  let totalDistance = 0, totalFuel = 0, totalCost = 0, count = 0;
+  const form = document.getElementById("fuelForm");
+  const table = document.querySelector("#resultTable tbody");
+  const summary = document.getElementById("summary");
+
+  async function getDistance(start, end) {
+    const service = new google.maps.DistanceMatrixService();
+    return new Promise((resolve, reject) => {
+      service.getDistanceMatrix({
+        origins: [start],
+        destinations: [end],
+        travelMode: 'DRIVING',
+        unitSystem: google.maps.UnitSystem.METRIC
+      }, (response, status) => {
+        if (status !== 'OK') return reject(status);
+        const distance = response.rows[0].elements[0].distance.value / 1000;
+        resolve(distance);
+      });
+    });
+  }
+
+  function updateSummary() {
+    summary.innerHTML = `
+      จำนวนเส้นทางทั้งหมด: ${count}<br/>
+      ระยะทางรวม: ${totalDistance.toFixed(2)} กม.<br/>
+      น้ำมันที่ใช้รวม: ${totalFuel.toFixed(2)} ลิตร<br/>
+      ค่าน้ำมันรวม: ${totalCost.toFixed(2)} บาท
+    `;
+  }
+
+  function renderData(data) {
+    table.innerHTML = "";
+    totalDistance = 0; totalFuel = 0; totalCost = 0; count = 0;
+
+    data.forEach((row, index) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.start}</td>
+        <td>${row.end}</td>
+        <td>${row.distance.toFixed(2)}</td>
+        <td>${row.fuelUsed.toFixed(2)}</td>
+        <td>${row.fuelCost.toFixed(2)}</td>
+        <td>
+          <button class="btn btn-edit" onclick='editEntry(${index})'>แก้ไข</button>
+          <button class="btn btn-danger" onclick='deleteEntry(${index})'>ลบ</button>
+        </td>
+      `;
+      table.appendChild(tr);
+      totalDistance += row.distance;
+      totalFuel += row.fuelUsed;
+      totalCost += row.fuelCost;
+      count++;
+    });
+    updateSummary();
+  }
+
+  async function loadData() {
+    const res = await fetch("https://script.google.com/macros/s/AKfycbx7Qd7z4Vw5kyXHcWKQzOSRKwNXPUSce0dU7va1VTIVS5OQmQtRkGUx22BXXwGWDX5KXA/exec?action=read");
+    const data = await res.json();
+    renderData(data);
+  }
+
+  async function deleteEntry(index) {
+    if (!confirm("ยืนยันการลบข้อมูลนี้?")) return;
+    await fetch("https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec?action=delete&index=" + index);
+    loadData();
+  }
+
+  async function editEntry(index) {
+    const start = prompt("จุดเริ่มต้นใหม่:");
+    const end = prompt("จุดปลายทางใหม่:");
+    const distance = parseFloat(prompt("ระยะทางใหม่ (กม.):"));
+    const fuelUsed = parseFloat(prompt("น้ำมันที่ใช้ (ลิตร):"));
+    const fuelCost = parseFloat(prompt("ค่าน้ำมัน (บาท):"));
+
+    await fetch("https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec?action=update&index=" + index, {
+      method: "POST",
+      body: JSON.stringify({ start, end, distance, fuelUsed, fuelCost }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    loadData();
+  }
+
+  form.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    const start = document.getElementById("start").value;
+    const end = document.getElementById("end").value;
+    const consumption = parseFloat(document.getElementById("consumption").value);
+    const price = parseFloat(document.getElementById("price").value);
+
+    const distance = await getDistance(start, end);
+    const fuelUsed = distance / consumption;
+    const fuelCost = fuelUsed * price;
+
+    await fetch('https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec?action=create', {
+      method: 'POST',
+      body: JSON.stringify({ start, end, distance, fuelUsed, fuelCost }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    form.reset();
+    loadData();
+  });
+
+  function exportToExcel() {
+    const tableExport = document.getElementById("resultTable").outerHTML;
+    const dataType = 'application/vnd.ms-excel';
+    const blob = new Blob(['\uFEFF' + tableExport], { type: dataType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = 'fuel_report.xls';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  window.onload = loadData;
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+  }
+</script>
 </body>
 </html>
